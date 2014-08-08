@@ -1,0 +1,188 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!--
+  Simple demo project showing how to create a MicroService within a Docker container
+  using Tomcat in embedded mode
+
+  This example simply installs a Jolokia Agent Servlet (www.jolokia.org) as a microservice with an embedded
+  Tomcat into a Docker Image.
+
+  The integration will startup this image, runs a simple test checking the version and then stops the container.
+
+  The following goals are useful:
+
+  * 'mvn package docker:build' : Build FAT-jar and container
+  * 'mvn install'              : Build fat-jar, build container, start container, test, stop container, remove container
+  * 'mvn package docker:push'  : Push container upstream (you would have to change the repository name in the maven plugin
+                                 for proper authentication, thouhg)
+
+  The test with 'mvn install' does the following in detail:
+
+  * Create a "fat" jar via the maven-shade-plugin
+  * Creates a Docker data container with 'tomcat-jolokia.jar' as described in assembly descriptor src/main/docker-assembly.xml
+  * Starts (and optionally pull) the jolokia/tomcat-7.0 container with the data container linked to it
+  * Waits until Tomcat is up (i.e. until it is reachable via an HTTP request)
+  * Runs an integration test via maven-failsafe-plugin, using rest-assured for accessing the deployed app.
+  * Prints out some version information about the contaner running (in order prove that's not a fake ;-)
+  * Stops and removes the containers.
+
+  -->
+
+  <groupId>org.jolokia</groupId>
+  <artifactId>docker-fatjar-demo</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
+
+  <properties>
+    <tomcat.version>7.0.55</tomcat.version>
+    <jolokia.version>1.2.2</jolokia.version>
+    <docker.maven.plugin.version>0.9.9</docker.maven.plugin.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.jolokia</groupId>
+      <artifactId>jolokia-core</artifactId>
+      <version>${jolokia.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.tomcat</groupId>
+      <artifactId>tomcat-util</artifactId>
+      <version>${tomcat.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.tomcat.embed</groupId>
+      <artifactId>tomcat-embed-core</artifactId>
+      <version>${tomcat.version}</version>
+    </dependency>
+
+    <!-- ======================================================================================  -->
+    <!-- Test -->
+
+    <dependency>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
+      <version>4.11</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>com.jayway.restassured</groupId>
+      <artifactId>rest-assured</artifactId>
+      <version>2.3.1</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+
+      <!--
+       The Shade plugin simply packs all dependencies into a single jar, optionally with specifyin a main class.
+       There are much more options, please refer to its documentation.
+
+       The important thing is, that the artifact created by this build will be replaced with the fat-jar
+       -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>2.3</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>org.jolokia.docker.fatjar.demo.StartService</mainClass>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <plugin>
+        <!-- The Docker Maven plugin is used to create docker image with the fat jar -->
+        <groupId>org.jolokia</groupId>
+        <artifactId>docker-maven-plugin</artifactId>
+        <version>${docker.maven.plugin.version}</version>
+        <configuration>
+          <!-- Docker Image to use -->
+          <image>java</image>
+          <dataImage>jolokia/${project.artifactId}:${project.version}</dataImage>
+          <!-- Merging with the base image -->
+          <mergeData>true</mergeData>
+          <command>java -Djava.security.egd=file:/dev/./urandom -jar /maven/tomcat-jolokia.jar</command>
+          <ports>
+            <port>tomcat.port:8080</port>
+          </ports>
+          <waitHttp>http://localhost:${tomcat.port}/jolokia</waitHttp>
+          <wait>10000</wait>
+          <!-- Assembly descriptor holds the reference to the created artifact-->
+          <assemblyDescriptor>src/main/docker-assembly.xml</assemblyDescriptor>
+        </configuration>
+
+        <executions>
+          <execution>
+            <id>start</id>
+            <phase>pre-integration-test</phase>
+            <goals>
+              <goal>start</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>stop</id>
+            <phase>post-integration-test</phase>
+            <goals>
+              <goal>stop</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <plugin>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <version>2.17</version>
+        <executions>
+          <execution>
+            <id>integration-test</id>
+            <goals>
+              <goal>integration-test</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>verify</id>
+            <goals>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <systemPropertyVariables>
+            <jolokia.url>http://localhost:${tomcat.port}/jolokia</jolokia.url>
+            <jolokia.version>${jolokia.version}</jolokia.version>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+
+
+      <!-- Tell surefire to skip test, we are using the failsafe plugin -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>2.10</version>
+        <configuration>
+          <skip>true</skip>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
